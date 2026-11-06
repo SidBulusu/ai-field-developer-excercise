@@ -1,7 +1,8 @@
 # AI field developer exercise
 
 This project contains four local Python tasks. Task 1 meets its original
-requirements and automated acceptance checks; Tasks 2–4 are not implemented.
+requirements and automated acceptance checks. Task 2's HTTP security gateway is
+implemented and tested; Tasks 3–4 are not implemented.
 See [AGENTS.md](AGENTS.md) for shared rules and
 [the MCP server README](mcp_server/README.md) for inputs, error semantics, and SDK
 compatibility details.
@@ -27,3 +28,13 @@ uv run pytest mcp_server/tests -v
 
 The implementation checklist is in
 [MCP_SERVER_IMPLEMENTATION.md](mcp_server/MCP_SERVER_IMPLEMENTATION.md).
+
+## Task 2 security gateway
+
+See the [gateway README](security_gateway/README.md) for verified local startup,
+JWT generation, sample requests, configuration, and HTTP/JSON-RPC limitations.
+Its downstream HTTP mock runs independently of Task 1's stdio server.
+
+```bash
+uv run pytest security_gateway/tests -q
+```
