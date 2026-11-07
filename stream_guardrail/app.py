@@ -1,4 +1,10 @@
-"""Local text-only SSE gateway. Never relay provider frames or headers verbatim."""
+"""Bounded text-only SSE gateway with no verbatim provider-frame relay.
+
+HTTP bytes, SSE events and text candidates have different boundaries and limits.
+Validate events before redaction and generate fresh output metadata so fields
+outside the redactor cannot bypass it. The response owns upstream cleanup even
+when downstream header/body writes fail.
+"""
 
 import asyncio
 import json

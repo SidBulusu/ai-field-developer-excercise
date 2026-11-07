@@ -1,5 +1,10 @@
 # Stream guardrail audit
 
+This report retains historical defect reproductions and fixture measurements.
+Current recorded acceptance is 119 guardrail tests within 366 repository tests,
+plus configured Ruff checks. Counts below identify the earlier audit runs;
+see [README.md](README.md) for current startup and verification commands.
+
 Scope: the stream_guardrail implementation, its tests and documented contract.
 The model router was not changed. This review used the existing project `.venv`;
 no dependency, additional environment or source clone was created.
@@ -94,7 +99,7 @@ control to address before broader exposure; P2 denotes operational hardening.
 | P2 CPU fairness, partially addressed below | Default-limit benchmarks reproduced stalls; cooperative framing/text batches now yield to other tasks | Retain the regression budgets; remeasure before increasing configured limits or supported concurrency | Default-limit heartbeat, deadlines, cancellation and 1/4/8 concurrent heavy streams now tested; arbitrary tuning and saturation remain unverified |
 | P2 cleanup lifetime | Shielded upstream/client closure has no separate time budget | Bound best-effort cleanup so a stuck transport cannot hold shutdown forever | A deliberately stalled aclose completes/aborts within policy without swallowing caller cancellation or writing raw text |
 | P2 observability | Fixed errors are safe but provide little operational diagnosis; configured URL queries may contain secrets in HTTPX INFO logs | Add content-free failure/latency/buffer counters and correlation IDs; prohibit credential-bearing queries or sanitize URL logging | Canary secrets never appear in application/dependency logs, counters distinguish framing/redaction/timeout failures, metrics do not contain text |
-| P2 reproducibility | Python 3.11 and the eventual review branch have not been tested by CI | Include currently untracked task files in the review commit and run locked CI on the supported Python/platform matrix | Fresh checkout of that actual commit, independent Task 3 tests, full suite and configured lint |
+| P2 reproducibility | Python 3.11 and the eventual review branch have not been tested by CI | Verify the review commit contains all required source/configuration and run locked CI on the supported Python/platform matrix | Fresh checkout of that actual commit, independent Task 3 tests, full suite and configured lint |
 
 Do not add a generic provider framework, large PII dependency or file split solely
 to make the implementation appear more sophisticated. The current three-file

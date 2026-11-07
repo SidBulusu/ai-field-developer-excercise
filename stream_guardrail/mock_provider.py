@@ -1,4 +1,8 @@
-"""Scripted synthetic SSE provider. No model, real customer data or credentials."""
+"""Scripted synthetic SSE provider; no model, customer data or credentials.
+
+Split text and wire bytes independently so tests expose assumptions about event,
+UTF-8 and PII boundaries instead of accidentally preserving them all together.
+"""
 
 import asyncio
 

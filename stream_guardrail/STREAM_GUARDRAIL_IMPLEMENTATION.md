@@ -1,326 +1,80 @@
 # Streaming PII Guardrail — Implementation Plan
 
-> **Location:** `stream_guardrail/`  
-> **Goal:** Build a responsive, bounded-memory LLM streaming proxy that redacts supported sensitive text before any of it reaches a client.  
-> **Shared rules:** Follow `../AGENTS.md`: inspect existing code first, explain the smallest viable approach, prefer readable code, reuse dependencies, and create files only when justified.  
-> **Status:** Latest performance follow-up verified: 315 passing repository tests, including 119 guardrail tests, and configured Ruff checks. AUDIT.md records reproduced defects, fixes, matching/concurrency measurements and remaining suggestions. Earlier sections are historical runs, not proof that every edge case had been covered.
+> **Location:** `stream_guardrail/`
+>
+> **Goal:** Responsive, bounded-memory streaming redaction for the documented PII grammar.
+>
+> **Shared rules:** [AGENTS.md](../AGENTS.md).
+>
+> **Status:** Baseline acceptance verified: 119 guardrail tests included in the latest recorded 366-test repository run; configured Ruff checks passed. Detailed findings and performance measurements are retained in [AUDIT.md](AUDIT.md).
 
-## Review decisions and phased delivery
+## Implemented decisions
 
-The first increment implements Phase C before A/B. A standalone redactor lets us
-test the safety invariant before creating an HTTP endpoint. Delivery continued with A/B together
-(scripted provider, bounded SSE parser and validated HTTP stream), D (connect the
-redactor and verify errors/cancellation), then E (real-socket acceptance and
-measurements). These increments are now verified for the documented subset. Do not expose an unchecked pass-through endpoint as the finished
-guardrail. Existing Task 1/2 implementations and dependencies remain unchanged.
+- **Delivery order:** Phase C (standalone redactor) preceded A/B (mock and bounded
+  HTTP/SSE parsing), then D (lifecycle integration) and E (real-socket acceptance
+  and measurements). This established the redaction invariant before exposing a
+  proxy. Existing dependencies and the root environment were reused.
+- **Email grammar:** ASCII
+  `[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}`.
+  This permissive syntax supports dots/plus signs, not quoted/Unicode mailboxes,
+  obfuscation, deliverability or DNS validation.
+- **Numbers:** SSNs are exactly `DDD-DD-DDDD`; cards are 13–19 ASCII digits with
+  optional single ASCII spaces/hyphens, including mixed separators. No SSN group
+  validity or Luhn check. Tabs, repeated spaces and Unicode digits are excluded.
+  Substring matching deliberately permits false positives. All overlapping match
+  intervals are merged, including chains, so one replacement cannot expose part
+  of a match beginning inside another.
+- **Pending state:** Retain the earliest suffix that might complete a supported
+  match, including intersecting complete matches. This is candidate detection,
+  rather than a fixed-size tail. Ordinary words can become email local parts.
+  The default 256-character cap rejects before appending beyond it, even when
+  the next character would resolve the candidate. Long words/URLs can fail closed;
+  numeric candidates beyond 19 digits also abort. Failure clears pending state
+  and closes the redactor. Event/request bounds separately cap transient input.
+- **Completion policy:** Only a valid finish reason followed by DONE calls
+  `finish()`: complete supported patterns are redacted and incomplete nonmatching
+  text is released. Thus `jane@exam` survives a valid `length` finish plus DONE.
+  Transport truncation, malformed events, cancellation and deadlines call `abort()`
+  and discard pending text. No failure emits DONE. Safe text already sent cannot
+  be retracted. This explicitly defines pattern-based, not comprehensive, privacy.
+- **No output bypass:** Strict event/JSON validation rejects unknown output modes,
+  duplicate keys, invalid Unicode and malformed shapes. Provider metadata is
+  discarded and outgoing SSE is generated locally. One text choice is supported;
+  reasoning, tool calls, multimodal content and arbitrary SDK compatibility are not.
+- **Framing and fairness:** Byte limits include comments, delimiters and incomplete
+  lines. UTF-8/BOM and LF/CRLF/CR splits are handled independently of text deltas;
+  lone CR dispatches immediately. Cooperative 8,192-byte framing slices and
+  256-character redaction batches preserve state while yielding the event loop.
+- **Resource ownership:** Fixed configured upstream, bounded uploads/events,
+  read/total deadlines, rejected compression/redirects and isolated headers avoid
+  transport bypasses. The streaming response owns upstream cleanup, including
+  failed header writes and unstarted generators. Consumption follows client
+  backpressure without a producer queue. Shielded cleanup still lacks a separate
+  deadline; see the audit's remaining hardening priorities.
 
-### Resolved for the first increment
+## Verification record
 
-- **Email grammar:** ASCII `[A-Za-z0-9._%+-]+` local part, `@`, one or more
-  dot-separated `[A-Za-z0-9-]+` domain labels, and a final alphabetic label of
-  at least two letters. Matching is case sensitive only in the sense that both
-  cases are explicitly accepted. Dots/plus signs are supported. This permissive
-  syntactic grammar does not validate DNS, deliverability or RFC mailbox rules.
-  Quoted local parts, Unicode mailboxes and obfuscated addresses are outside it.
-- **Numbers:** SSNs use exactly `DDD-DD-DDDD`; cards use 13–19 ASCII digits,
-  optionally separated by a single ASCII space or hyphen (mixed separators are
-  accepted). No Luhn requirement. Tabs, repeated spaces and Unicode digits are
-  outside this grammar. SSN group validity is not checked. Patterns are matched
-  as substrings without requiring word boundaries, deliberately allowing false
-  positives. Emails/cards take precedence over SSN-shaped substrings.
-- **Pending state:** Retain the earliest suffix that could extend into an email
-  or numeric match, plus any overlapping complete match. Ordinary unfinished
-  words must wait because they can become email local parts. This is candidate
-  detection, not a fixed tail of N characters. Detection uses standard-library
-  regexes over the bounded window; no extra dependencies were justified.
-- **Limits and false positives:** `max_pending_chars` defaults to 256 and must be
-  a positive integer. Reject before appending beyond it; a candidate filling the
-  cap fails on the next character even if that character would resolve it.
-  Long ordinary words/URLs can therefore fail closed. Numeric candidates exceeding
-  19 digits also fail closed, including long non-card identifiers. Failure clears
-  pending text and permanently closes the redactor. These are conservative local
-  policies, not universal PII coverage. Future HTTP configuration must pass the
-  validated limit to each request's redactor.
-- **Lifecycle:** `finish()` is terminal and treats end of generated text as a
-  boundary, redacting complete matches and releasing incomplete nonsensitive
-  candidates. Call it only after verified successful provider completion.
-  `abort()` discards pending text on errors, truncated EOF and cancellation.
-  A `feed()` failure returns no output from that call. Error messages contain no
-  input text. Previously released safe output cannot be retracted.
-- **Memory scope:** Only unresolved characters persist between calls. `feed`
-  returns output for its supplied delta, so transient output scales with that
-  delta. Transport must separately cap event/delta size. The redactor's unit
-  tests establish bounded pending state, not total HTTP-process memory.
-
-### Review concerns tracked across increments
-
-1. **Request contract:** Set request-byte and message-length limits before JSON
-   parsing. Define accepted roles/fields, require strict `stream=true`, reject
-   `n != 1`, tools, multimodal content and unknown options before contacting the
-   provider. Do not echo validation inputs into error responses.
-2. **Output bypasses:** Allowlist upstream event shapes, including role, finish
-   and usage events. Reject unknown generated-text fields. Generate safe output
-   metadata locally rather than reflecting arbitrary provider IDs, errors or
-   headers. Strict JSON parsing must handle duplicate keys, nonfinite numbers,
-   lone surrogates and excessive nesting safely.
-3. **Framing:** Count raw bytes, including comments and unterminated lines, toward
-   the framing cap; otherwise a data-only cap has a bypass. Cover LF, CRLF and lone
-   CR, split UTF-8 and the stream BOM deliberately. SSE permits multi-line data.
-   Undelimited trailing data at EOF is not a complete event. The authoritative
-   [SSE parsing rules](https://html.spec.whatwg.org/multipage/server-sent-events.html#parsing-an-event-stream)
-   are broader than just splitting on `\n\n`.
-4. **Successful completion:** Define finish ordering and require `[DONE]`;
-   premature EOF must abort rather than call `finish()`. Error events must never
-   be followed by a success marker. Earlier HTTP 200 headers cannot be replaced
-   after streaming starts.
-5. **Resource bounds:** Configure connect/read timeouts and a total stream
-   deadline; keepalives can defeat read timeouts. Reject redirects and unexpected
-   content types. Decide compression policy so decompression cannot allocate an
-   unbounded decoded chunk before the event cap is checked. Disable unnecessary
-   environment proxies and prevent client-cookie/header forwarding.
-6. **Cleanup and evidence:** Keep the upstream open through generator consumption
-   and close it even during cancellation (see [HTTPX streaming lifecycle](https://www.python-httpx.org/async/#streaming-responses)).
-   Test with actual loopback sockets: in-process clients may buffer streams and
-   conceal TTFT, backpressure or cancellation failures. No HTTP, SSE, latency,
-   total-memory or cancellation claims are established by the redactor tests.
-7. **Shared documentation:** AGENTS.md uses generic `IMPLEMENTATION.md` paths that
-   differ from the existing task-specific filenames. Preserve existing filenames
-   and use their actual paths. Clean-clone verification and linting remain open;
-   this increment neither adds a linter nor claims that gate has passed.
-
-### Verification for this increment
-
-Executed successfully in the existing environment:
-
-```bash
-UV_CACHE_DIR=/private/tmp/ai-field-uv-cache uv run --no-sync pytest stream_guardrail/tests -q
-# 32 passed
-UV_CACHE_DIR=/private/tmp/ai-field-uv-cache uv run --no-sync pytest -q
-# 176 passed, including Tasks 1 and 2
-```
-
-The cache override keeps uv's cache in a writable temporary location. `--no-sync`
-uses the existing environment; dependency installation/clean-clone checks were
-not repeated. Before implementation the new tests failed collection because the
-redactor module did not yet exist. HTTP startup commands and performance
-measurements remain unverified and are not supplied as working instructions.
-
-## Second increment — HTTP/SSE integration and lifecycle verification
-
-Implemented `app.py` and `mock_provider.py` without installing packages. SSE
-framing stays in `app.py`; it handles split UTF-8, BOM, LF/CRLF/CR, comments and
-multi-line data. The cap includes all event bytes, including comment lines and
-line endings. Events and JSON are validated before text enters the redactor.
-Unknown generated-text fields fail closed. Request and event limits default to
-64 KiB; the pending window defaults to 256 characters. These configuration values
-and the exact narrow request/output contract are documented in `README.md`.
-
-Concerns 1–6 above are addressed for the documented subset: fixed configured URL,
-bounded request upload, strict validation, no reflected metadata, no compression
-or redirects, read and total deadlines, verified finish + `[DONE]`, sanitized
-errors and cancellation-shielded upstream cleanup. AnyIO is already installed
-and required by the HTTP stack; no dependency declarations or lockfile changed.
-The reusable owned HTTPX client closes on application shutdown; injected clients
-remain caller-owned. Cleanup is also placed at the response boundary so failures
-before generator iteration cannot strand an open upstream response.
-
-Verification executed successfully:
-
-```bash
-uv run --no-sync pytest -q -s
-# 233 passed in 7.19 s, including 89 guardrail tests
-```
-
-Loopback sockets were initially denied by the sandbox (`PermissionError`); the
-suite then passed with unrestricted local-socket access. Both provider and gateway
-also started through `python -m uvicorn ... --factory` in separate processes.
-The CLI test initially assumed exit code zero on SIGTERM; inspection of installed
-Uvicorn confirmed it re-raises captured signals after cleanup, so the test now
-accepts the corresponding SIGTERM exit as well. HTTPX exercised the documented
-request; the equivalent README curl command was not separately executed.
-
-Measured on the final full-suite run: first **safe text** at 0.0081 seconds;
-total scripted response duration 0.3324 seconds. The assertion checks that the
-provider has not completed when safe text arrives. A separate 10,000-event
-parser/redactor run reported peak event size 90 bytes and peak unresolved text
-5 characters. These measurements apply to their fixtures, not worst-case RSS or
-universal latency. A blocked ASGI writer read only one upstream chunk until
-cancellation; actual loopback disconnect and read/total-timeout tests confirmed
-that paused upstream providers close promptly.
-
-**Open at the end of this increment (resolved in the third increment below):**
-long HTTP-stream process-memory profiling, sustained socket-level slow-reader
-pressure, and fresh-environment acceptance.
-There is no gateway background producer/queue, but the operating system and HTTP
-stack also buffer data. Do not infer a bound on total resident memory from the
-redactor/parser counters alone. Linting was not installed or run. Concern 7's
-shared stale filenames remain documented rather than changed across unrelated
-tasks. Do not check the full completion gate until outstanding evidence exists.
-
-## Third increment — long streams, socket pressure and fresh environment
-
-Added `tests/test_stream_memory.py` because process-isolated allocation profiling
-and sustained load fixtures have a separate responsibility from protocol tests.
-No production endpoints, runtime code, dependencies or lockfile changes were
-needed. The profiling factory and load provider exist only in the test module.
-The existing loopback server helper now optionally configures its send buffer.
-
-**Long HTTP stream:** Run a gateway in a separate Uvicorn process, warm lazy
-imports, and use standard-library `tracemalloc` to compare 1,024 and 16,384 events.
-The client validates and discards each event rather than collecting the response.
-The fixture repeats a synthetic email and verifies each replacement. The test
-allows at most 512 KiB additional traced peak and 256 KiB additional retained
-traced allocations when output grows 16-fold. It also reports the gateway
-process's RSS high-water mark using `resource.getrusage`; RSS is measured, not
-asserted as an absolute per-request ceiling.
-
-Final full-suite measurements on macOS / Python 3.13.3:
-
-| Events | Output bytes | Duration | Traced peak bytes | Retained traced bytes | RSS high-water bytes |
-| --- | --- | --- | --- | --- | --- |
-| 1,024 | 140,410 | 0.54 s | 345,125 | 45,401 | 69,304,320 |
-| 16,384 | 2,244,730 | 8.12 s | 604,044 | 43,828 | 69,615,616 |
-
-Traced peak grew by 258,919 bytes; retained allocations did not grow. Profiling
-adds overhead, so these durations are not comparable to the unprofiled short
-mock's TTFT. Tracemalloc does not cover every native allocation, RSS is a process
-high-water mark, and these are single-request fixtures. None establishes a
-universal memory ceiling under arbitrary event sizes or concurrent traffic.
-
-**Socket pressure:** A raw client with a small receive buffer initially stops
-reading, then performs 50 throttled reads of at most 1,024 bytes. Small server
-send buffers force transport backpressure. Upstream production stalled after
-7,536 events in the final run, far before its million-event limit; 51,200 bytes
-were read without an exposed email, and disconnect closed the active provider.
-The stall count depends on OS buffering and is reported rather than hardcoded.
-The earlier ASGI blocked-write test independently proves that the application
-does not launch an unbounded upstream consumer.
-
-The initial load fixture starved disconnect processing because synchronous socket
-writes did not yield control; it now explicitly yields to the event loop. The
-first allocation sample also included lazy imports, so an unprofiled warm-up was
-added before comparing lengths. Both issues were in the new test harness; the
-passing measurements above use the corrected fixture.
-
-**Fresh environment:** Copied tracked and nonignored current source files to
-`/private/tmp/guardrail-clean-ketsqfwu`, excluding `.git`, `.venv`, `.env` and
-caches, then created a new environment using the unchanged lockfile. This is a
-clean source snapshot, not a literal Git clone: Task 3 files remain untracked in
-the working repository. Executed from the snapshot:
-
-```bash
-uv sync --locked
-uv run --no-sync pytest stream_guardrail/tests -q -s --tb=short --log-level=ERROR
-# 91 passed in 17.28 s
-uv run --no-sync pytest -q -s --tb=short --log-level=ERROR
-# 235 passed in 20.51 s
-```
-
-The executable was invoked as `/Users/sid/.local/bin/uv` because it was not on
-PATH in the temporary directory. Local sockets required sandbox escalation.
-Factory CLI startup and shutdown passed in both fresh-environment suites.
-Unprofiled mock TTFT was 0.0088 s and total duration 0.3350 s in the final run.
-
-All Task 3 required acceptance checks are now complete for the documented local,
-text-only subset. The project-wide Task 4, linting and literal clean-clone gate
-remain separate work. Ruff was not installed or run; Python 3.11 was not separately
-tested. The existing PII grammar exclusions and conservative false positives
-remain deliberate limitations, not claims of comprehensive production DLP.
-
-## Follow-up audit and environment cleanup
-
-At the user's request, temporary verification environments/source copies at
-`/private/tmp/guardrail-clean-ketsqfwu` and
-`/private/tmp/router-acceptance-99ttew2a`, plus the small temporary uv cache,
-were removed. The working repository's `.venv` was preserved. These environments
-were additional dependency/source reproducibility checks, not prerequisites for
-running the task and not a replacement for the working environment. No further
-virtual environment or source clone was created during this audit.
-
-The audit identified unnecessary complete-pattern scans on every character of an
-entirely ambiguous buffer. The redactor now skips those scans until a prefix can
-actually be released. On the same 25,200-character fixture with 250-character
-words, elapsed time changed from 0.9820 s to 0.1721 s. This is a local observation,
-not a universal performance bound. Long local-part and bounded-prose regression
-fixtures preserve the release/redaction behavior.
-
-Added verification of blocked-write deadlines and cancellation for ASGI 2.3/2.4,
-header-send failure before the body generator starts, and reuse/shutdown of the
-owned HTTPX client. Deadline checks passed without changing lifecycle code. On an
-unwritable/disconnected connection the safe outcome can be termination without an
-error event; clients must not interpret an HTTP 200 header alone as success.
-
-The successful-EOS policy was also made explicit: an incomplete `jane@exam` is
-released after a valid length finish and DONE because it does not match a complete
-supported pattern. On broken transport it is discarded instead. A test records
-that distinction; broader partial-identifier redaction is not claimed.
-
-Executed in the normal project environment:
+The latest functional run in the existing macOS arm64/Python 3.13.3 environment:
 
 ```bash
 uv run --no-sync pytest -q -s --tb=short --log-level=ERROR
-# 294 passed in 25.38 s, including 98 guardrail tests
+# 366 passed in 55.04 s, including 119 guardrail tests.
 uv run --no-sync ruff check .
-# All checks passed
+# All checks passed.
 ```
 
-The run includes all real HTTP, memory, backpressure and new lifecycle checks.
-Mock TTFT was 0.0091 s and total duration 0.3347 s. The 1,024/16,384-event memory
-fixtures reported traced peaks of 345,639/610,687 bytes; these remain single-stream
-fixture measurements. No model-router implementation was changed in this audit.
+Acceptance includes every split/one-character redaction, overlapping matches,
+strict framing and event validation, successful/incomplete/truncated completion,
+real HTTP early output/disconnects, stalled readers, a 16-fold stream-length
+allocation comparison and concurrent performance/deadline/cancellation checks.
+The audit preserves corrected overlap disclosure, delayed CR dispatch and mock
+upload deadline defects, plus the CPU-starvation reproduction and measurements.
 
-For the current concern-by-concern assessment and reviewer commands, use the
-README's reviewer walkthrough. Historical claims about missing linting or
-not-yet-executed acceptance below describe the earlier increment, not open work.
-
-## Detailed audit — overlapping matches and CR responsiveness
-
-The later audit reproduced a partial PII disclosure missed by the earlier suite:
-ordinary non-overlapping regex replacement could consume a card and expose the
-rest of an email beginning inside it. Matching now discovers all overlapping
-starts and merges intersecting spans, both for release decisions and replacement.
-Transitive-overlap tests cover every text split, individual characters and network
-bytes. Connected recognized values produce one replacement marker.
-
-CR-delimited SSE events also waited for more input or EOF. They now dispatch at
-CR while an optional following LF remains part of byte-limit accounting. Exact
-wire caps are tested for LF, CR and CRLF. A real HTTP handshake proves safe text
-arrives while a CR-only provider is paused. EOF no longer needs a second event
-finalization branch. The mock now enforces configured upload size/time bounds.
-
-Seven targeted cases failed before correction; the focused suites then passed
-102 tests and the full working-environment run passed 306 tests in 26.29 s,
-including 110 guardrail tests. Configured Ruff checks pass. Decision-focused code
-comments explain overlap safety, CR accounting, strict event validation,
-compression policy, completion and response/client ownership.
-
-See [AUDIT.md](AUDIT.md) for evidence, limitations and ordered suggestions. Privacy
-policy for incomplete identifiers on valid forced finishes, aggregate concurrency,
-CPU fairness, bounded cleanup and operational observability were still
-unimplemented recommendations at that point. No dependency or environment was added, no fresh
-clone was created, and no model-router implementation was changed in this audit.
-
-## Performance follow-up — matching, scheduling and concurrency
-
-- [x] Measure 4/16/60 KB prose, near-limit local parts, domain labels, overlapping
-  matches and numeric candidates; verify output and bounded pending state.
-- [x] Reproduce and fix a 429 ms event-loop stall on a valid large delta. Use
-  cooperative 8,192-byte framing slices and 256-character text batches, retaining
-  redaction state and direct backpressure. A 1,024-character batch failed the
-  eight-stream <100 ms heartbeat target; the final batch measured 49 ms.
-- [x] Verify a large delta yields to heartbeat, 50 ms provider deadline and
-  explicit cancellation; cancelled processing closes the upstream.
-- [x] Measure 1/4/8 real HTTP clients with a stalled reader, tracing gateway
-  allocations in a separate process using the existing environment; verify
-  redaction, completion and cleanup through the response lifetime.
-- [x] Separately measure 1/4/8 CPU-heavy streams without allocation tracing.
-- [x] Run the complete repository suite: 315 tests passed in 44.72 s, including
-  119 guardrail tests; configured Ruff checks pass.
-
-See [AUDIT.md](AUDIT.md#performance-validation-follow-up) for reproducible workloads,
-local regression budgets, measured costs and remaining limits. No environment,
-dependency or model-router change was needed. Higher concurrency, saturation,
-arbitrary tuning limits and other Python/platform versions remain unverified.
+Earlier locked source-snapshot/environment checks were additional reproducibility
+checks; their temporary environments were removed. They do not establish a clean
+checkout of the final review commit. Python 3.11, other platforms, live providers
+and production capacity remain unverified. See [README.md](README.md) for current
+run commands and [AUDIT.md](AUDIT.md) for fixture-specific evidence and open limits.
 
 ## 1. Requirements and completion evidence
 
@@ -336,7 +90,7 @@ Build an **LLM Gateway proxy endpoint** that sends text-generation requests to a
 | Memory efficiency | Bound **both** unresolved text and incoming SSE event framing; do not collect the whole response |
 | Robust asynchronous behavior | Handle slow readers, disconnects, malformed events, provider errors and cleanup predictably |
 
-**Scope choice, not a hidden requirement:** Implement the **text-only, single-choice, OpenAI-compatible Chat Completions SSE subset** first. Use a local mock provider that speaks this interface. Do not claim universal compatibility with all LLM APIs. Live-provider integration is optional, not necessary for validating the gateway logic.
+**Scope choice, not a hidden requirement:** Implement the **text-only, single-choice, OpenAI-style Chat Completions SSE subset** first. Use a local mock provider that speaks this interface. Do not claim universal compatibility with all LLM APIs. Live-provider integration is optional, not necessary for validating the gateway logic.
 
 ## 2. Design boundaries and working assumptions
 

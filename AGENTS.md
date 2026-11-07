@@ -1,6 +1,6 @@
 # Shared Engineering Rules and Guardrails
 
-> **Scope:** Applies to the repository root and all four task folders. This file defines shared decisions and working rules. Task-specific requirements, implementation steps, and acceptance tests live in each folder's `IMPLEMENTATION.md`.
+> **Scope:** Applies to the repository root and all four task folders. This file defines shared decisions and working rules. Task-specific requirements, implementation steps, and acceptance tests live in each folder's named implementation guide (linked below).
 >
 > **Status:** This is a plan, not a statement that any feature has been implemented or tested.
 
@@ -19,11 +19,11 @@ project-root/
 ├── mcp_server/
 │   └── MCP_SERVER_IMPLEMENTATION.md  # Task 1: stdio MCP server
 ├── security_gateway/
-│   └── IMPLEMENTATION.md         # Task 2: HTTP MCP security proxy
+│   └── SECURITY_GATEWAY_IMPLEMENTATION.md  # Task 2: HTTP MCP security proxy
 ├── stream_guardrail/
-│   └── IMPLEMENTATION.md         # Task 3: streaming PII redaction
+│   └── STREAM_GUARDRAIL_IMPLEMENTATION.md  # Task 3: streaming PII redaction
 └── model_router/
-    └── IMPLEMENTATION.md         # Task 4: SQLite rate limiting and model fallback
+    └── MODEL_ROUTER_IMPLEMENTATION.md  # Task 4: SQLite rate limiting and model fallback
 ```
 
 Each task owns its implementation and tests. Shared dependencies may be configured centrally, but **every task must be runnable and testable independently**.
@@ -45,7 +45,7 @@ Implement the following required behavior before adding optional features:
 
 The primary goal is **correct, readable, maintainable implementations**, not maximum code output. Follow these rules for every change, including changes made by AI coding assistants:
 
-1. **Inspect first.** Read the relevant task `IMPLEMENTATION.md`, the existing code, and the related tests. Identify what already works before proposing changes.
+1. **Inspect first.** Read the relevant task implementation guide, the existing code, and the related tests. Identify what already works before proposing changes.
 2. **Form a small plan before substantial edits.** State the requirement, intended behavior, affected existing files/functions, and how correctness will be verified. Prefer a short, concrete plan over a large speculative design.
 3. **Reuse before adding.** Prefer editing an existing function or using an official SDK/library capability over writing a duplicate implementation. Check for similar code before creating a helper.
 4. **Create only necessary files.** Do not invent broad `utils/`, `services/`, `interfaces/`, or shared frameworks without a demonstrated need. A new file should have a clear responsibility that is difficult to express cleanly within an existing module.
@@ -100,7 +100,7 @@ These are working assumptions, not additional requirements imposed by an externa
 - Test adverse conditions (bad input, broken upstream responses, timeouts, authorization denials, chunk splits, concurrent admission), not only happy paths.
 - Use deterministic mock responses and a controllable clock where possible; don't make core tests depend on live networks or API keys.
 - If behavior is not verified, mark it `TODO` or unchecked; **never claim a test passed until it ran successfully**.
-- Update the corresponding task `IMPLEMENTATION.md` as items are completed, and place user-facing run commands in that task's `README.md` once verified.
+- Update the corresponding task implementation guide as items are completed, and place user-facing run commands in that task's `README.md` once verified.
 
 ## Initial repository setup — minimum first
 
@@ -180,9 +180,9 @@ Put URL endpoints, secrets, database path, timeouts and limits in environment co
 
 1. Set up the minimal Task 1 environment and `.gitignore`; introduce additional dependencies and `.env.example` only when actually needed.
 2. Complete [`mcp_server/MCP_SERVER_IMPLEMENTATION.md`](mcp_server/MCP_SERVER_IMPLEMENTATION.md).
-3. Complete [`security_gateway/IMPLEMENTATION.md`](security_gateway/IMPLEMENTATION.md).
-4. Complete [`stream_guardrail/IMPLEMENTATION.md`](stream_guardrail/IMPLEMENTATION.md).
-5. Complete [`model_router/IMPLEMENTATION.md`](model_router/IMPLEMENTATION.md).
+3. Complete [`security_gateway/SECURITY_GATEWAY_IMPLEMENTATION.md`](security_gateway/SECURITY_GATEWAY_IMPLEMENTATION.md).
+4. Complete [`stream_guardrail/STREAM_GUARDRAIL_IMPLEMENTATION.md`](stream_guardrail/STREAM_GUARDRAIL_IMPLEMENTATION.md).
+5. Complete [`model_router/MODEL_ROUTER_IMPLEMENTATION.md`](model_router/MODEL_ROUTER_IMPLEMENTATION.md).
 6. Run all tests and linting; verify documented commands from a clean clone.
 
 A task is complete only when its required behavior works **and** the acceptance checks in its implementation document have been executed. Defer polish and bonus features until then.

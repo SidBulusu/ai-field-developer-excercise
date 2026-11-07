@@ -1,4 +1,9 @@
-"""Authenticated HTTP/JSON-RPC proxy; separate from Task 1's stdio server."""
+"""Authenticated HTTP/JSON-RPC proxy, independent of the stdio MCP server.
+
+Authenticate before parsing or forwarding, then enforce the tool policy before
+I/O. Preserve allowed request bytes for transparency while isolating credentials
+and cookies; downstream response bodies remain a trusted-service boundary.
+"""
 
 import json
 import math

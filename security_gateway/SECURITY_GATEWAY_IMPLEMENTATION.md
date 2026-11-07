@@ -214,33 +214,23 @@ Do **not** add these while implementing the required behavior:
 
 ## Verification record
 
-- `uv run --locked pytest security_gateway/tests -q`: 99 gateway tests passed after the numeric conversion fix.
-- `uv run --locked pytest -q`: all 144 tests passed after the numeric conversion fix.
-- `uv run pytest -v`: 131 tests passed during initial implementation.
-- Fresh temporary source snapshot: `uv sync --locked` followed by
-  `uv run pytest -q`: all 142 tests passed across Tasks 1 and 2 after review.
-  This used a new virtual environment, not the existing workspace environment.
-- Started the mock and gateway using the Uvicorn commands in `README.md` on
-  loopback ports 8001 and 8000; verified independent mock discovery, viewer/admin
-  tokens, transparent discovery, viewer denial, admin success, and curl requests.
-  Both services were stopped after verification.
-- Gateway tests use HTTP middleware and spy/ASGI transports to prove zero
-  downstream calls for denied requests and invalid credentials. They also cover
-  malformed JSON/envelopes, batches, nested arguments, ID preservation, error and
-  header relay, unavailable downstream, timeouts, and HTTP client shutdown.
-- The supported subset, notification behavior, JWT claim assumptions and header
-  allowlists are documented in `README.md`. Phase A's independent startup check
-  was performed during final verification rather than before gateway coding.
-- Review reproduced and fixed three gaps with regression tests: unpaired Unicode
-  surrogates reaching response rendering, downstream cookies shared across callers
-  by HTTPX's cookie jar, and fractional IDs losing precision in local responses.
-  Valid Unicode pairs and escaped administrative tool names are also tested.
-- Commit review reproduced an uncaught Decimal conversion failure for an extreme
-  negative exponent. The parser now returns a controlled `-32700` error with null
-  ID. HTTP regression tests cover IDs and nested arguments, zero downstream calls,
-  and successful handling of the next valid request.
-- Comments explain parser ambiguity, request-scoped identity, fixed JWT algorithm
-  selection, original-body forwarding, cookie isolation, and response serialization.
-- No lint tool is currently configured; no lint run, actual Git clean-clone check,
-  or load testing is claimed. Payload sizes are not explicitly bounded. These
-  limits are documented in the task README. Tasks 3 and 4 remain outside this implementation.
+- The latest recorded functional run passed 99 gateway tests within 366 repository
+  tests; configured Ruff checks passed on macOS arm64/Python 3.13.3.
+- `uv sync --locked` and an earlier temporary source/environment check succeeded.
+  That historical snapshot is not a clean checkout of the final review commit.
+- Uvicorn startup, independent mock discovery, token generation and viewer/admin
+  curl requests were checked on loopback. Both services were stopped afterward.
+- `tests/test_gateway.py` uses middleware plus spy/ASGI transports to prove zero
+  downstream calls for invalid credentials and denied requests. It covers strict
+  JSON/envelopes, notifications, IDs, body/header/status relay, safe transport
+  failures, timeouts and client shutdown.
+- Regression fixes cover unpaired Unicode, shared downstream cookies, fractional
+  ID precision and an uncaught Decimal conversion for extreme negative exponents.
+  Invalid numeric input now returns controlled `-32700` with null ID; the next
+  valid request still succeeds. Valid Unicode pairs and escaped tool names are tested.
+- [README.md](README.md) documents the exact HTTP/JSON-RPC subset and JWT/header
+  policies. Payload byte caps, sustained load, full MCP transport and production
+  identity controls remain outside this implementation. HTTPX timeout is per
+  operation, not a whole-request deadline. Downstream bodies are trusted and relayed.
+- Python 3.11 and the actual review commit's clean checkout remain unverified;
+  see the [root verification scope](../README.md#verification-and-limits).

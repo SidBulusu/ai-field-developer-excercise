@@ -11,7 +11,7 @@ From the repository root, with Python 3.11+ and [uv](https://docs.astral.sh/uv/g
 
 ```bash
 uv sync --locked
-uv run python -m mcp_server.server
+uv run --no-sync python -m mcp_server.server
 ```
 
 The server waits for newline-delimited MCP JSON-RPC input. stdout contains only
@@ -93,7 +93,7 @@ References: [SDK v2](https://py.sdk.modelcontextprotocol.io/),
 From the repository root:
 
 ```bash
-uv run pytest mcp_server/tests -v
+uv run --no-sync pytest mcp_server/tests -v
 ```
 
 The suite covers strict schemas, SDK-client discovery and both tools over actual

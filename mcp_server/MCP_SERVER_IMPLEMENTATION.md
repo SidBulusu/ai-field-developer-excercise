@@ -110,9 +110,10 @@ Verified on Python 3.13.3 with MCP SDK 2.3.0 and Pydantic 2.14.3.
 - SDK-client discovery and both tools were exercised over actual stdio.
 - Raw-pipe tests checked protocol error codes, recovery, and stdout isolation.
 
-Project-wide linting and clean-clone verification belong to the final project
-completion gate in `AGENTS.md`; neither has verification recorded here. They do
-not add requirements to the original Task 1 acceptance criteria.
+The latest recorded project-wide run passed 366 tests, including these 45 tests,
+and configured Ruff checks on macOS arm64/Python 3.13.3. Python 3.11 and a clean
+checkout of the actual review commit remain unverified; see the
+[root verification scope](../README.md#verification-and-limits).
 
 See [README.md](README.md) for the verified launch path, input assumptions,
 error mapping, and the SDK 2.3.0 stdio compatibility adapter.

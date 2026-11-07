@@ -1,3 +1,9 @@
+"""Check strict tool contracts before SDK transport behavior is introduced.
+
+Direct model/tool assertions isolate coercion and business rules; stdio tests
+separately verify that dispatch preserves these rules on the wire.
+"""
+
 import pytest
 from pydantic import ValidationError
 

@@ -1,4 +1,8 @@
-"""Local stdio MCP server. All customer data and refunds are synthetic."""
+"""Local stdio MCP server with synthetic customer data and refunds.
+
+The SDK owns MCP framing and dispatch. Narrow adapters enforce the assignment's
+strict argument/error contract; keep their real-stdio tests when upgrading SDKs.
+"""
 
 import json
 import logging
